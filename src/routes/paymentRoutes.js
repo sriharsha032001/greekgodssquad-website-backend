@@ -1,86 +1,98 @@
 const express = require('express');
+const router = express.Router();
 const Razorpay = require('razorpay');
 const crypto = require('crypto');
 const AWS = require('aws-sdk');
-const dotenv = require('dotenv');
-dotenv.config();
 
-const router = express.Router();
-
-// Razorpay instance
-const razorpay = new Razorpay({
-  key_id: process.env.RAZORPAY_KEY_ID, // Environment variable for Razorpay Key ID
-  key_secret: process.env.RAZORPAY_KEY_SECRET, // Environment variable for Razorpay Key Secret
-});
-
-// AWS S3 instance
+// Configure AWS S3
 const s3 = new AWS.S3({
   accessKeyId: process.env.AWS_ACCESS_KEY_ID,
   secretAccessKey: process.env.AWS_SECRET_ACCESS_KEY,
-  region: process.env.AWS_REGION,
+  region: process.env.AWS_REGION
 });
 
-// Function to generate a signed URL for S3 bucket
-const generateSignedUrl = async () => {
-  const params = {
-    Bucket: process.env.AWS_BUCKET_NAME,
-    Key: 'ebook1-training.pdf',  // Your file key
-    Expires: 60,  // link valid for 1 minute
-    ResponseContentDisposition: 'attachment',  // forces download
-  };
+// Initialize Razorpay
+const razorpay = new Razorpay({
+  key_id: process.env.RAZORPAY_KEY_ID,
+  key_secret: process.env.RAZORPAY_KEY_SECRET
+});
 
-  try {
-    const url = await s3.getSignedUrlPromise('getObject', params);
-    return url;
-  } catch (error) {
-    console.error("Error generating signed URL", error);
-    throw new Error('Failed to generate signed URL');
-  }
-};
-
-// Route to create an order
+// Create Order Endpoint
 router.post('/create-order', async (req, res) => {
-  const { amount } = req.body;
-
   try {
+    const { amount } = req.body;
+
+    if (!amount || isNaN(amount)) {
+      return res.status(400).json({ error: 'Valid amount is required' });
+    }
+
     const options = {
       amount: amount,
       currency: 'INR',
-      receipt: `receipt_${Date.now()}`,
+      receipt: `receipt_${Date.now()}`
     };
 
     const order = await razorpay.orders.create(options);
-    res.json({ id: order.id, key: process.env.RAZORPAY_KEY_ID });
+    res.json({
+      success: true,
+      orderId: order.id,
+      razorpayKey: process.env.RAZORPAY_KEY_ID
+    });
+
   } catch (error) {
-    console.error('Error creating Razorpay order:', error);
-    res.status(500).send('Error creating order');
+    console.error('Razorpay Order Error:', error);
+    res.status(500).json({ 
+      error: 'Failed to create order',
+      details: error.error?.description || error.message
+    });
   }
 });
 
-// Route to verify the payment signature and generate the download URL
+// Verify Payment Endpoint
 router.post('/verify-payment', async (req, res) => {
-  const { razorpay_payment_id, razorpay_order_id, razorpay_signature } = req.body;
+  try {
+    const { razorpay_payment_id, razorpay_order_id, razorpay_signature } = req.body;
 
-  if (!razorpay_payment_id || !razorpay_order_id || !razorpay_signature) {
-    return res.status(400).json({ message: 'Missing required fields' });
-  }
-
-  const body = razorpay_order_id + "|" + razorpay_payment_id;
-  const expectedSignature = crypto
-    .createHmac('sha256', process.env.RAZORPAY_KEY_SECRET)
-    .update(body)
-    .digest('hex');
-
-  if (expectedSignature === razorpay_signature) {
-    try {
-      const downloadUrl = await generateSignedUrl(); // Generate the download link after successful payment
-      res.status(200).json({ message: 'Payment verified successfully', downloadUrl });
-    } catch (error) {
-      res.status(500).json({ message: 'Failed to generate download URL' });
+    if (!razorpay_payment_id || !razorpay_order_id || !razorpay_signature) {
+      return res.status(400).json({ error: 'Missing payment verification fields' });
     }
-  } else {
-    res.status(400).json({ message: 'Payment verification failed' });
+
+    const body = `${razorpay_order_id}|${razorpay_payment_id}`;
+    const expectedSignature = crypto
+      .createHmac('sha256', process.env.RAZORPAY_KEY_SECRET)
+      .update(body)
+      .digest('hex');
+
+    if (expectedSignature !== razorpay_signature) {
+      return res.status(400).json({ error: 'Invalid payment signature' });
+    }
+
+    // Generate S3 download URL
+    const downloadUrl = await generateSignedUrl();
+    res.json({
+      success: true,
+      message: 'Payment verified successfully',
+      downloadUrl
+    });
+
+  } catch (error) {
+    console.error('Payment Verification Error:', error);
+    res.status(500).json({ 
+      error: 'Payment verification failed',
+      details: error.message
+    });
   }
 });
+
+// Helper function for S3 signed URL
+const generateSignedUrl = async () => {
+  const params = {
+    Bucket: process.env.AWS_BUCKET_NAME,
+    Key: 'ebook1-training.pdf',
+    Expires: 300, // 5 minutes
+    ResponseContentDisposition: 'attachment'
+  };
+  return await s3.getSignedUrlPromise('getObject', params);
+};
 
 module.exports = router;
