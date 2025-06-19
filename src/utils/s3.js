@@ -14,7 +14,7 @@ export const generateSignedUrl = async () => {
   const params = {
     Bucket: process.env.AWS_BUCKET_NAME,  // your bucket name
     Key: 'ebook1-training.pdf',     // your PDF file key
-    Expires: 60 * 5,                      // link valid for 5 minutes
+    Expires: 60 * 60,                      // link valid for 60 minutes
     ResponseContentDisposition: 'attachment', // forces download
   };
 
