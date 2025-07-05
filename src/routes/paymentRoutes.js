@@ -1,8 +1,8 @@
 const express = require('express');
 const Razorpay = require('razorpay');
 const crypto = require('crypto');
-const AWS = require('aws-sdk');
 const dotenv = require('dotenv');
+const { generateSignedUrl } = require('../utils/s3.js');
 dotenv.config();
 
 const router = express.Router();
@@ -12,37 +12,23 @@ const razorpay = new Razorpay({
   key_secret: process.env.RAZORPAY_KEY_SECRET,
 });
 
-const s3 = new AWS.S3({
-  accessKeyId: process.env.AWS_ACCESS_KEY_ID,
-  secretAccessKey: process.env.AWS_SECRET_ACCESS_KEY,
-  region: process.env.AWS_REGION,
-});
-
-const generateSignedUrl = async () => {
-  const params = {
-    Bucket: process.env.AWS_BUCKET_NAME,
-    Key: 'ebook1-training.pdf',
-    Expires: 60,
-    ResponseContentDisposition: 'attachment',
-  };
-
-  try {
-    const url = await s3.getSignedUrlPromise('getObject', params);
-    return url;
-  } catch (error) {
-    console.error("Error generating signed URL", error);
-    throw new Error('Failed to generate signed URL');
-  }
-};
+const validEbooks = ['ebook1-training.pdf', 'ebook2-training.pdf'];
 
 router.post('/create-order', async (req, res) => {
-  const { amount } = req.body;
+  const { amount, ebookKey } = req.body;
+
+  if (!validEbooks.includes(ebookKey)) {
+    return res.status(400).json({ message: 'Invalid ebook specified' });
+  }
 
   try {
     const options = {
       amount,
       currency: 'INR',
       receipt: `receipt_${Date.now()}`,
+      notes: {
+        ebookKey,
+      },
     };
 
     const order = await razorpay.orders.create(options);
@@ -68,10 +54,23 @@ router.post('/verify-payment', async (req, res) => {
 
   if (expectedSignature === razorpay_signature) {
     try {
-      const downloadUrl = await generateSignedUrl();
+      const order = await razorpay.orders.fetch(razorpay_order_id);
+      
+      if (!order.notes || !order.notes.ebookKey) {
+        return res.status(400).json({ message: 'Ebook key not found in order notes' });
+      }
+
+      const ebookKey = order.notes.ebookKey;
+
+      if (!validEbooks.includes(ebookKey)) {
+        return res.status(400).json({ message: 'Invalid ebook key found in order' });
+      }
+      
+      const downloadUrl = await generateSignedUrl(ebookKey);
       res.status(200).json({ message: 'Payment verified successfully', downloadUrl });
     } catch (error) {
-      res.status(500).json({ message: 'Failed to generate download URL' });
+      console.error('Error during payment verification:', error);
+      res.status(500).json({ message: 'Failed to verify payment or generate download URL' });
     }
   } else {
     res.status(400).json({ message: 'Payment verification failed' });
