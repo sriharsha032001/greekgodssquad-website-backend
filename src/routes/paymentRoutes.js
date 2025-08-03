@@ -12,7 +12,7 @@ const razorpay = new Razorpay({
   key_secret: process.env.RAZORPAY_KEY_SECRET,
 });
 
-const validEbooks = ['ebook1-training.pdf', 'ebook2-training.pdf'];
+const validEbooks = ['ebook1-training.pdf', 'ebook2-training.pdf','ebook3-training.pdf' ];
 
 router.post('/create-order', async (req, res) => {
   const { amount, ebookKey } = req.body;
